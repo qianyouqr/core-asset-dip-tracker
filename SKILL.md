@@ -1,6 +1,8 @@
 ---
 name: core-asset-dip-tracker
 description: 核心资产抄底跟踪。每天扫描 核心资产.xlsx 里的股票，对跌破 MA20 − 2σ 下轨（R4A 策略买入信号）的股票推送提醒，用 WebSearch 找下跌原因，套"价格变了还是价值变了"12 类型框架判断是否能抄底。7 天冷静期去重，仅触发时推企微、始终落地本地 markdown。当用户提到以下场景时触发：核心资产抄底、核心资产扫描、核心资产跟踪、扫一下核心资产、2σ下轨、抄底信号、dip tracker、core asset dip、日度跌破提醒。
+metadata:
+  requires: "quant-buddy-skill"
 ---
 
 # core-asset-dip-tracker — 核心资产抄底跟踪
@@ -12,6 +14,23 @@ description: 核心资产抄底跟踪。每天扫描 核心资产.xlsx 里的股
 **资产池**：[核心资产.xlsx](c:/claude code/strategy/核心资产抄底策略/核心资产.xlsx)
 **报告目录**：`c:\claude code\reports\核心资产抄底\YYYY-MM-DD_核心资产抄底.md`
 **状态文件**：`state/triggered.json`（记录每只股票的最近一次触发日期，用于 7 天冷静期）
+
+---
+
+## Step 0：核心 Skill 挂载（硬前置，不可跳过）
+
+在执行任何流程前，按以下顺序查找 quant-buddy-skill 的 SKILL.md：
+
+```
+1. {本 Skill 同级目录}/quant-buddy-skill/          （sibling，最可靠）
+2. ~/.claude/skills/quant-buddy-skill/             （Claude Code 用户级）
+3. ~/.openclaw/skills/quant-buddy-skill/           （OpenClaw 用户级）
+4. ~/.codex/skills/quant-buddy-skill/              （Codex CLI 用户级）
+5. {cwd}/.{claude|openclaw|codex|github}/skills/  （项目级）
+```
+
+找到后将路径记为 `CORE_ROOT`，写入 `output/.core_root` 缓存（供 scan.py 复用）。  
+**所有路径均不存在时**：立即停止，提示用户先安装 quant-buddy-skill。
 
 ---
 
@@ -120,7 +139,7 @@ python C:\Users\wenlong\.claude\skills\core-asset-dip-tracker\scripts\scan.py
 
 ## 依赖 skill
 
-- **quant-buddy-skill**：价格数据源（必需）
+- **quant-buddy-skill**（核心层，必需）：价格数据源，通过 Step 0 动态挂载，`scan.py` 调用其 `scripts/call.py runMultiFormula`
 - **wecom-push**：企微推送通道（必需）
 - **WebSearch**（built-in）：下跌原因调研
 
