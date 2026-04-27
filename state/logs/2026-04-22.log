@@ -1,0 +1,5 @@
+ 
+========== 2026/04/22 周三  8:53:51.92 START ========== 
+cwd: c:\claude code 
+API Error: 402 {"error":{"message":"Team weekly spending limit reached: $1002.20 / $1000.00","type":"weekly_limit_exceeded"},"type":"error"}
+========== 2026/04/22 周三  8:56:01.38 END (exit=1) ========== 
