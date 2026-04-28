@@ -11,26 +11,35 @@ metadata:
 
 **数据源**：quant-buddy-skill（观照量化平台，统一 A/港/美股）
 **信号口径**：guanzhao 原生的近 20 日均/标准差，与 [最优策略总结.md](c:/claude code/strategy/核心资产抄底策略/最优策略总结.md) R4A 一致
-**资产池**：[核心资产.xlsx](c:/claude code/strategy/核心资产抄底策略/核心资产.xlsx)
-**报告目录**：`c:\claude code\reports\核心资产抄底\YYYY-MM-DD_核心资产抄底.md`
+**资产池**：`{SKILL_ROOT}/data/核心资产.xlsx`（可用 `--excel <路径>` 或环境变量 `CORE_ASSET_EXCEL` 覆盖）
+**报告目录**：`{SKILL_ROOT}/output/reports/YYYY-MM-DD_核心资产抄底.md`
 **状态文件**：`state/triggered.json`（记录每只股票的最近一次触发日期，用于 7 天冷静期）
 
 ---
 
-## Step 0：核心 Skill 挂载（硬前置，不可跳过）
+## Step 0：依赖 Skill 挂载（硬前置，不可跳过）
 
-在执行任何流程前，按以下顺序查找 quant-buddy-skill 的 SKILL.md：
+> **路径约定**：本文档中 `{SKILL_ROOT}` = 本 skill 安装根目录（core-asset-dip-tracker/），即当前 SKILL.md 所在目录的上级。
 
+在执行任何流程前，依次挂载以下两个 Skill：
+
+**① quant-buddy-skill**（数据层，必需）——按以下顺序查找，取第一个存在的路径，记为 `CORE_ROOT`，写入 `{SKILL_ROOT}/output/.core_root` 缓存（供 scan.py 复用）。**找不到时立即停止**，提示用户先安装 quant-buddy-skill。
 ```
-1. {本 Skill 同级目录}/quant-buddy-skill/          （sibling，最可靠）
-2. ~/.claude/skills/quant-buddy-skill/             （Claude Code 用户级）
-3. ~/.openclaw/skills/quant-buddy-skill/           （OpenClaw 用户级）
-4. ~/.codex/skills/quant-buddy-skill/              （Codex CLI 用户级）
-5. {cwd}/.{claude|openclaw|codex|github}/skills/  （项目级）
+{SKILL_ROOT}/../quant-buddy-skill/
+~/.claude/skills/quant-buddy-skill/
+~/.openclaw/skills/quant-buddy-skill/
+~/.codex/skills/quant-buddy-skill/
+{cwd}/.{claude|openclaw|codex|github}/skills/quant-buddy-skill/
 ```
 
-找到后将路径记为 `CORE_ROOT`，写入 `output/.core_root` 缓存（供 scan.py 复用）。  
-**所有路径均不存在时**：立即停止，提示用户先安装 quant-buddy-skill。
+**② wecom-push**（推送层，可选）——同样顺序查找，记为 `WECOM_ROOT`，写入 `{SKILL_ROOT}/output/.wecom_root` 缓存。找不到时跳过 Phase 5，仅生成本地报告。
+```
+{SKILL_ROOT}/../wecom-push/
+~/.claude/skills/wecom-push/
+~/.openclaw/skills/wecom-push/
+~/.codex/skills/wecom-push/
+{cwd}/.{claude|openclaw|codex|github}/skills/wecom-push/
+```
 
 ---
 
@@ -38,15 +47,13 @@ metadata:
 
 ### Phase 1 — 运行扫描脚本
 ```bash
-python C:\Users\wenlong\.claude\skills\core-asset-dip-tracker\scripts\scan.py
+python {SKILL_ROOT}/scripts/scan.py
 ```
 脚本会读取 Excel、通过 quant-buddy-skill 批量拉价、计算信号、应用 7 天冷静期去重、更新 `state/triggered.json`，最后把一个完整 JSON 打到 stdout。JSON 包含：
 - `triggered[]`：今天新触发、需要分析的股票
 - `cooled_down[]`：今天仍跌破但 7 天内已提醒过，跳过不推
 - `all_stocks[]`：全 6 只的全景快照
 - `anomalies[]`：guanzhao 找不到 ticker 或解析失败
-
-**注意**：脚本内部会读 `/tmp/gzq_out.txt`（quant-buddy 的固定输出文件），无需额外配置。
 
 ### Phase 2 — 无触发时的早退
 若 `triggered` 为空：
@@ -79,7 +86,7 @@ python C:\Users\wenlong\.claude\skills\core-asset-dip-tracker\scripts\scan.py
 - 7 天冷静期（提示）
 - 数据异常（如 ASML.O 这类 guanzhao 找不到的票）
 
-写到 `c:\claude code\reports\核心资产抄底\YYYY-MM-DD_核心资产抄底.md`（如目录不存在需创建）。
+写到 `{SKILL_ROOT}/output/reports/YYYY-MM-DD_核心资产抄底.md`（如目录不存在需创建）。
 
 ### Phase 5 — 企微精简推送（仅触发时）
 1. 创建临时精简版 `PUSH_TMP.md`，格式：
@@ -98,7 +105,7 @@ python C:\Users\wenlong\.claude\skills\core-asset-dip-tracker\scripts\scan.py
    ```
 2. 调用：
    ```bash
-   node C:\Users\wenlong\.claude\skills\wecom-push\scripts\push.js \
+   node {WECOM_ROOT}/scripts/push.js \
      --type markdown --file PUSH_TMP.md --title "核心资产抄底信号"
    ```
 3. 推送成功后删除 `PUSH_TMP.md`
@@ -139,7 +146,7 @@ python C:\Users\wenlong\.claude\skills\core-asset-dip-tracker\scripts\scan.py
 
 ## 依赖 skill
 
-- **quant-buddy-skill**（核心层，必需）：价格数据源，通过 Step 0 动态挂载，`scan.py` 调用其 `scripts/call.py runMultiFormula`
+- **quant-buddy-skill**（核心层，必需）：价格数据源，通过 Step 0 动态挂载，`scan.py` 直接 import `QuantAPI` 调用
 - **wecom-push**：企微推送通道（必需）
 - **WebSearch**（built-in）：下跌原因调研
 

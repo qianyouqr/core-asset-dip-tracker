@@ -40,7 +40,11 @@ except Exception:
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_EXCEL = r"c:\claude code\strategy\核心资产抄底策略\核心资产.xlsx"
+# 优先读环境变量，回退到 skill 内置 data/ 目录（跨用户/跨平台）
+DEFAULT_EXCEL = os.environ.get(
+    "CORE_ASSET_EXCEL",
+    os.path.join(SKILL_DIR, "data", "核心资产.xlsx"),
+)
 STATE_FILE = os.path.join(SKILL_DIR, "state", "triggered.json")
 
 
