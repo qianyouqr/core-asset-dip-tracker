@@ -10,8 +10,15 @@ metadata:
 每天扫描核心资产 Excel 里的 6 只（支持增删）股票，检测 **R4A 抄底买入信号 = 收盘价 < MA20 − 2 × STD20**，触发后做下跌原因调研 + 抄底判断，生成本地报告 + 企微精简推送。
 
 **数据源**：quant-buddy-skill（观照量化平台，统一 A/港/美股）
-**信号口径**：guanzhao 原生的近 20 日均/标准差，与 [最优策略总结.md](c:/claude code/strategy/核心资产抄底策略/最优策略总结.md) R4A 一致
+**信号口径**：一次 `runMultiFormula` 计算 4 条矩阵公式，其中前 3 条与 [最优策略总结.md](c:/claude code/strategy/核心资产抄底策略/最优策略总结.md) 的 R4A 信号口径一致，第 4 条用于报告展示：
+```
+资产池收盘价 = 资产池构造(资产名1, 资产名2, ...) * "全市场每日收盘价（分钟刷新）"
+MA20        = 平均("资产池收盘价", 20)                 # 报告展示字段
+下轨        = "MA20" - 2 * 标准差("资产池收盘价", 20)
+信号        = "资产池收盘价" < "下轨"
+```
 **资产池**：`{SKILL_ROOT}/data/核心资产.xlsx`（可用 `--excel <路径>` 或环境变量 `CORE_ASSET_EXCEL` 覆盖）
+**已确认快照**：`{SKILL_ROOT}/data/assets_snapshot.json`（Excel 变更需用户显式确认才会同步）
 **报告目录**：`{SKILL_ROOT}/output/reports/YYYY-MM-DD_核心资产抄底.md`
 **状态文件**：`state/triggered.json`（记录每只股票的最近一次触发日期，用于 7 天冷静期）
 
@@ -45,14 +52,30 @@ metadata:
 
 ## 工作流
 
+### Phase 0.5 — 资产池一致性检查（自动）
+
+[scripts/scan.py](scripts/scan.py) 启动时会自动比对 Excel 与 `data/assets_snapshot.json`：
+- **首次运行**（无快照）→ 自动以 Excel 为准生成快照，正常扫描。
+- **无差异** → 直接进入扫描。
+- **有差异**（增/删/改名）→ 把 diff 写入 `state/pending_changes.json`、打印差异、**以退出码 2 中止**。**不更新 triggered.json、不推送企微。**
+
+收到退出码 2 时，必须引导用户运行：
+```bash
+python {SKILL_ROOT}/scripts/confirm_assets.py     # 交互 y/N
+# 或：
+python {SKILL_ROOT}/scripts/confirm_assets.py --accept-all
+python {SKILL_ROOT}/scripts/confirm_assets.py --reject
+```
+确认后再次运行 scan.py 即可。
+
 ### Phase 1 — 运行扫描脚本
 ```bash
 python {SKILL_ROOT}/scripts/scan.py
 ```
-脚本会读取 Excel、通过 quant-buddy-skill 批量拉价、计算信号、应用 7 天冷静期去重、更新 `state/triggered.json`，最后把一个完整 JSON 打到 stdout。JSON 包含：
-- `triggered[]`：今天新触发、需要分析的股票
+脚本会读取已确认快照、用 4 条矩阵公式批量拉信号与展示字段（一次 `runMultiFormula` + 一次 `read_data`）、应用 7 天冷静期去重、更新 `state/triggered.json`，最后把一个完整 JSON 打到 stdout。
+- `triggered[]`：今天新触发、需要分析的股票（含 `close` / `ma20` / `lower` / `dist_pct`）
 - `cooled_down[]`：今天仍跌破但 7 天内已提醒过，跳过不推
-- `all_stocks[]`：全 6 只的全景快照
+- `all_stocks[]`：全资产的全景快照（含 `close` / `ma20` / `lower` / `dist_pct` / `triggered`）
 - `anomalies[]`：guanzhao 找不到 ticker 或解析失败
 
 ### Phase 2 — 无触发时的早退
@@ -81,10 +104,12 @@ python {SKILL_ROOT}/scripts/scan.py
 
 ### Phase 4 — 生成完整报告
 按 [templates/报告模板.md](templates/报告模板.md) 组装：
-- 今日触发（详细分析）
-- 全景快照（6 只全表）
+- 今日触发（详细分析；`当前收盘` / `MA20` / `2σ下轨` 直接来自 `scan.py` 输出）
+- 全景快照（全资产表；`MA20` 直接来自 `scan.py` 输出）
 - 7 天冷静期（提示）
 - 数据异常（如 ASML.O 这类 guanzhao 找不到的票）
+
+其中 `跌破幅度` 可由 `dist_pct = (close - lower) / lower * 100` 本地计算。
 
 写到 `{SKILL_ROOT}/output/reports/YYYY-MM-DD_核心资产抄底.md`（如目录不存在需创建）。
 
@@ -139,7 +164,8 @@ python {SKILL_ROOT}/scripts/scan.py
 - **仅触发时推企微**——避免每日空推噪音
 - **7 天冷静期**——同一只股票 7 天内只提醒 1 次（基于 triggered.json 的 `last_triggered` 日期）
 - **每次运行会更新 triggered.json**——本次新触发的股票 → 覆盖 `last_triggered` 为今日；冷静期内的保持不变
-- **Excel 可增删股票**——脚本每次重新读，无需改代码
+- **Excel 可增删股票**——脚本每次重新读，但变更需经 confirm_assets.py 显式确认（保护机制）
+- **快照（snapshot）是权威源**——扫描时实际使用 `data/assets_snapshot.json`，Excel 仅作为变更输入
 - **guanzhao 不识别的 ticker**（如 ASML.O）进入 `anomalies[]`，不影响其他股票的信号，在报告中单独列出提示用户
 
 ---
