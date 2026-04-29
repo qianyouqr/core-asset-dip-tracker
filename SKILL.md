@@ -104,7 +104,14 @@ python {SKILL_ROOT}/scripts/scan.py
 
 其中 `跌破幅度` 可由 `dist_pct = (close - lower) / lower * 100` 本地计算。
 
-**新版本提示（仅当 `update_available` 不为 null 时附加）**：在报告最末尾追加一节：
+**版本页脚（常驻，无论是否有新版都要追加到报告末尾）**：
+```
+---
+_由 core-asset-dip-tracker v{skill_version} 生成_
+```
+`{skill_version}` 取自 scan.py 输出的 `skill_version` 字段。
+
+**新版本提示（仅当 `update_available` 不为 null 时追加，放在版本页脚之前）**：
 ```
 ## 🆕 新版本提示
 
@@ -134,9 +141,13 @@ python {SKILL_ROOT}/scripts/scan.py
 
    📄 完整报告：reports/YYYY-MM-DD_核心资产抄底.md
    ```
-   若 `update_available` 不为 null，在文末再追加一行（控制在一行内，不展开 changes）：
+   若 `update_available` 不为 null，在该行之后追加一行（控制在一行内，不展开 changes）：
    ```
    🆕 v{latest} 可用（当前 v{current}）— git pull 升级
+   ```
+   最后无论是否有新版，都在推送末尾加一行常驻版本页脚：
+   ```
+   _v{skill_version}_
    ```
 2. 调用内置推送脚本（自动从 `config/config.json` 读 webhook）：
    ```bash

@@ -13,6 +13,6 @@
 - 新增 `cache/CHANGELOG.md`（本文件）记录每个版本的变更
 - 新增 `scripts/check_update.py`：每 24h 静默检查 GitHub 远端是否有新版本，stdlib `urllib`、2 秒超时、失败静默
 - `scripts/scan.py` 启动时 stderr 自报版本（`[core-asset-dip-tracker vX.Y.Z]`），并把远端检查结果写入 stdout JSON 的 `update_available` 字段
-- SKILL.md 工作流补充：Phase 4 报告底部、Phase 5 企微推送末尾会自动追加新版本提示（仅提示，不自动升级）
+- SKILL.md 工作流补充：每日报告底部 + 企微推送末尾**常驻**版本页脚 `v{skill_version}`；当发现新版时再额外追加"🆕 新版本提示"段（报告）/ 一行（推送）
 - `config/config.example.json` 新增 `update_check.{enabled, remote_config_url, remote_changelog_url, interval_hours}` 配置段，默认开启
-- `.gitignore` 新增 `cache/*` + `!cache/CHANGELOG.md`：CHANGELOG 入库，其它 cache 临时文件不入库
+- `.gitignore` 新增 `cache/*` + `!cache/CHANGELOG.md`、`state/`、`output/`、`data/assets_snapshot.json`：CHANGELOG 入库，运行时状态/产物不入库
