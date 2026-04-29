@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 
 
 DEFAULT_CONFIG: Dict[str, Any] = {
+    "skill_version": "0.0.0",
     "asset_pool": {
         "excel_path": "data/核心资产.xlsx",
     },
@@ -30,6 +31,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "scheduler": {
         "enabled": True,
+    },
+    "update_check": {
+        "enabled": True,
+        "remote_config_url": "https://raw.githubusercontent.com/qianyouqr/core-asset-dip-tracker/main/config/config.example.json",
+        "remote_changelog_url": "https://raw.githubusercontent.com/qianyouqr/core-asset-dip-tracker/main/cache/CHANGELOG.md",
+        "interval_hours": 24,
     },
     "cooldown_days": 7,
 }

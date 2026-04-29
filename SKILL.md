@@ -64,6 +64,8 @@ python {SKILL_ROOT}/scripts/confirm_assets.py --reject
 python {SKILL_ROOT}/scripts/scan.py
 ```
 脚本会读取已确认快照、用 4 条矩阵公式批量拉信号与展示字段（一次 `runMultiFormula` + 一次 `read_data`）、应用 7 天冷静期去重、更新 `state/triggered.json`，最后把一个完整 JSON 打到 stdout。
+- `skill_version`：当前 skill 版本号（来自 `config.skill_version`）
+- `update_available`：远端有新版本时为 `{current, latest, changes}`，无新版/已节流/检查失败为 `null`
 - `triggered[]`：今天新触发、需要分析的股票（含 `close` / `ma20` / `lower` / `dist_pct`）
 - `cooled_down[]`：今天仍跌破但 7 天内已提醒过，跳过不推
 - `all_stocks[]`：全资产的全景快照（含 `close` / `ma20` / `lower` / `dist_pct` / `triggered`）
@@ -71,8 +73,8 @@ python {SKILL_ROOT}/scripts/scan.py
 
 ### Phase 2 — 无触发时的早退
 若 `triggered` 为空：
-1. 生成本地 markdown 报告（仅"全景快照"+"冷静期"两节，不含"今日触发"详情）
-2. **不推送企微**
+1. 生成本地 markdown 报告（仅"全景快照"+"冷静期"两节，不含"今日触发"详情）；若 `update_available` 不为 null，按 Phase 4 末尾规则追加"🆕 新版本提示"节
+2. **不推送企微**（保持"无触发不推"原则）
 3. 结束，告知用户"今日无新触发信号"
 
 ### Phase 3 — 有触发时：下跌原因 + 抄底判断
@@ -102,6 +104,16 @@ python {SKILL_ROOT}/scripts/scan.py
 
 其中 `跌破幅度` 可由 `dist_pct = (close - lower) / lower * 100` 本地计算。
 
+**新版本提示（仅当 `update_available` 不为 null 时附加）**：在报告最末尾追加一节：
+```
+## 🆕 新版本提示
+
+当前版本 {current} → 最新版本 {latest}。运行 `git pull` 升级。
+
+### 更新内容
+{changes}   ← 直接粘贴 update_available.changes（已经是 markdown 段落）
+```
+
 写到 `{SKILL_ROOT}/output/reports/YYYY-MM-DD_核心资产抄底.md`（如目录不存在需创建）。
 
 ### Phase 5 — 企微精简推送（仅触发时）
@@ -121,6 +133,10 @@ python {SKILL_ROOT}/scripts/scan.py
    ...
 
    📄 完整报告：reports/YYYY-MM-DD_核心资产抄底.md
+   ```
+   若 `update_available` 不为 null，在文末再追加一行（控制在一行内，不展开 changes）：
+   ```
+   🆕 v{latest} 可用（当前 v{current}）— git pull 升级
    ```
 2. 调用内置推送脚本（自动从 `config/config.json` 读 webhook）：
    ```bash
@@ -158,6 +174,7 @@ python {SKILL_ROOT}/scripts/scan.py
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
+| `skill_version` | `0.0.0` | 当前 skill 版本号（升级时同步更新本字段与 [cache/CHANGELOG.md](cache/CHANGELOG.md)） |
 | `asset_pool.excel_path` | `data/核心资产.xlsx` | 资产池 Excel 路径（相对 SKILL_ROOT 或绝对路径） |
 | `snapshot.auto_sync` | `true` | Excel 与 snapshot 有差异时是否自动同步快照（不阶断扫描） |
 | `snapshot.notify_on_pool_change` | `false` | 自动同步发生时是否额外推送变更摘要到企微 |
@@ -165,6 +182,10 @@ python {SKILL_ROOT}/scripts/scan.py
 | `notification.wecom.webhook` | `""` | 企微群机器人 webhook URL |
 | `notification.wecom.mentioned_list` | `[]` | @ 用户 ID 列表（可选） |
 | `notification.wecom.mentioned_mobile_list` | `[]` | @ 手机号列表（可选） |
+| `update_check.enabled` | `true` | 是否启用远端更新检查（关闭后 scan.py 不发任何 HTTP 请求） |
+| `update_check.remote_config_url` | GitHub raw URL | 远端 config.example.json 的 raw 地址（用于读取最新 `skill_version`） |
+| `update_check.remote_changelog_url` | GitHub raw URL | 远端 CHANGELOG.md 的 raw 地址（用于提取本地版本之后的更新内容） |
+| `update_check.interval_hours` | `24` | 节流间隔；同一窗口内重复运行 scan.py 不会重复发请求 |
 | `cooldown_days` | `7` | 冷静期天数 |
 
 CLI / 环境变量优先级：`--excel` > `CORE_ASSET_EXCEL` > `config.json` > 内置默认。
@@ -188,3 +209,12 @@ CLI / 环境变量优先级：`--excel` > `CORE_ASSET_EXCEL` > `config.json` > �
 - **WebSearch**（built-in）：下跌原因调研
 
 企微推送已内置为 [scripts/wecom_push.py](scripts/wecom_push.py)（stdlib `urllib`，无额外依赖），不再需要外部 wecom-push skill。
+
+---
+
+## 版本与更新
+
+- 当前版本号以 `config/config.example.json` 的 `skill_version` 字段为准。
+- 变更历史：[cache/CHANGELOG.md](cache/CHANGELOG.md)
+- 远端仓库：<https://github.com/qianyouqr/core-asset-dip-tracker>
+- `scripts/scan.py` 启动时会 stderr 自报版本，并每 24h 静默检查一次远端是否有新版（由 [scripts/check_update.py](scripts/check_update.py) 实现）。发现新版会注入 stdout JSON 的 `update_available` 字段，并由 Phase 4/5 的报告 + 推送追加提示。**仅提示，不自动升级**——升级请用户手动 `git pull`。

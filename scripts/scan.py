@@ -47,6 +47,7 @@ PENDING_FILE = os.path.join(SKILL_DIR, "state", "pending_changes.json")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config_loader import load_config, resolve_excel_path, wecom_enabled  # noqa: E402
 from wecom_push import push_markdown  # noqa: E402
+from check_update import check_for_update  # noqa: E402
 
 
 def _find_core_root() -> str:
@@ -445,6 +446,16 @@ def main():
     today = date.today()
     run_date = today.strftime("%Y-%m-%d")
 
+    # ── 启动版本横幅 + 远端更新检查（24h 节流，失败静默） ────────
+    skill_version = str(cfg.get("skill_version") or "unknown")
+    print(f"[core-asset-dip-tracker v{skill_version}]", file=sys.stderr, flush=True)
+    update_info = check_for_update(cfg, SKILL_DIR)
+    if update_info:
+        print(
+            f"🆕 发现新版本 {update_info['latest']}（当前 {update_info['current']}）— 运行 git pull 升级。",
+            file=sys.stderr, flush=True,
+        )
+
     # ── Phase 0.5：资产池快照一致性检查 ───────────────────────
     excel_assets = asset_pool.load_excel(excel_path)
     status, payload, diff_dict = check_snapshot(excel_assets, auto_sync=auto_sync)
@@ -509,6 +520,8 @@ def main():
 
     out = {
         "run_date": run_date,
+        "skill_version": skill_version,
+        "update_available": update_info,
         "snapshot_status": status,
         "asset_pool_change": _diff_summary(diff_dict) if diff_dict else None,
         "triggered": triggered,

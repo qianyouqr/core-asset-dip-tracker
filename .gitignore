@@ -4,3 +4,16 @@ config/config.json
 # Python bytecode cache
 __pycache__/
 *.pyc
+
+# cache: only CHANGELOG.md is tracked; other cache contents are local
+cache/*
+!cache/CHANGELOG.md
+
+# runtime state (per-machine, machine-generated)
+state/
+
+# generated reports & local artifacts
+output/
+
+# per-user asset snapshot (regenerated from Excel on first run)
+data/assets_snapshot.json
