@@ -17,8 +17,8 @@ MA20        = 平均("资产池收盘价", 20)                 # 报告展示字
 下轨        = "MA20" - 2 * 标准差("资产池收盘价", 20)
 信号        = "资产池收盘价" < "下轨"
 ```
-**资产池**：`{SKILL_ROOT}/data/核心资产.xlsx`（可用 `--excel <路径>` 或环境变量 `CORE_ASSET_EXCEL` 覆盖）
-**已确认快照**：`{SKILL_ROOT}/data/assets_snapshot.json`（Excel 变更需用户显式确认才会同步）
+**资产池**：`{SKILL_ROOT}/data/核心资产.xlsx`（路径由 `config/config.json` 配置，也可用 `--excel <路径>` 或环境变量 `CORE_ASSET_EXCEL` 覆盖）
+**已同步快照**：`{SKILL_ROOT}/data/assets_snapshot.json`（默认 `auto_sync=true` 时会随 Excel 变更自动覆盖）
 **报告目录**：`{SKILL_ROOT}/output/reports/YYYY-MM-DD_核心资产抄底.md`
 **状态文件**：`state/triggered.json`（记录每只股票的最近一次触发日期，用于 7 天冷静期）
 
@@ -28,7 +28,7 @@ MA20        = 平均("资产池收盘价", 20)                 # 报告展示字
 
 > **路径约定**：本文档中 `{SKILL_ROOT}` = 本 skill 安装根目录（core-asset-dip-tracker/），即当前 SKILL.md 所在目录的上级。
 
-在执行任何流程前，依次挂载以下两个 Skill：
+在执行任何流程前，挂载以下 Skill：
 
 **① quant-buddy-skill**（数据层，必需）——按以下顺序查找，取第一个存在的路径，记为 `CORE_ROOT`，写入 `{SKILL_ROOT}/output/.core_root` 缓存（供 scan.py 复用）。**找不到时立即停止**，提示用户先安装 quant-buddy-skill。
 ```
@@ -39,34 +39,25 @@ MA20        = 平均("资产池收盘价", 20)                 # 报告展示字
 {cwd}/.{claude|openclaw|codex|github}/skills/quant-buddy-skill/
 ```
 
-**② wecom-push**（推送层，可选）——同样顺序查找，记为 `WECOM_ROOT`，写入 `{SKILL_ROOT}/output/.wecom_root` 缓存。找不到时跳过 Phase 5，仅生成本地报告。
-```
-{SKILL_ROOT}/../wecom-push/
-~/.claude/skills/wecom-push/
-~/.openclaw/skills/wecom-push/
-~/.codex/skills/wecom-push/
-{cwd}/.{claude|openclaw|codex|github}/skills/wecom-push/
-```
+> 企微推送已内置在 [scripts/wecom_push.py](scripts/wecom_push.py)，不再依赖外部 wecom-push skill；webhook 在 `config/config.json` 里配置。
 
 ---
 
 ## 工作流
 
-### Phase 0.5 — 资产池一致性检查（自动）
+### Phase 0.5 — 资产池一致性检查（软提示 + 自动同步）
 
-[scripts/scan.py](scripts/scan.py) 启动时会自动比对 Excel 与 `data/assets_snapshot.json`：
-- **首次运行**（无快照）→ 自动以 Excel 为准生成快照，正常扫描。
+[scripts/scan.py](scripts/scan.py) 启动时会比对 Excel 与 `data/assets_snapshot.json`，默认行为（`config.snapshot.auto_sync=true`）：
+- **首次运行**（无快照）→ 以 Excel 为准生成快照，正常扫描。
 - **无差异** → 直接进入扫描。
-- **有差异**（增/删/改名）→ 把 diff 写入 `state/pending_changes.json`、打印差异、**以退出码 2 中止**。**不更新 triggered.json、不推送企微。**
+- **有差异**（增/删/改名）→ 自动以 Excel 覆盖快照，stderr 提示 `资产池已自动同步：新增 N / 移除 M / 改名 K`，扫描照常进行，所有差异同时输出到 stdout JSON 的 `asset_pool_change` 字段。默认 **不推送企微**，可将 `config.snapshot.notify_on_pool_change` 设为 `true` 启用变更摘要推送。
 
-收到退出码 2 时，必须引导用户运行：
+如果需要严格审核（`config.snapshot.auto_sync=false`），scan 会在检测到变更时写 `state/pending_changes.json` 并以退出码 2 中止，需手动运行：
 ```bash
-python {SKILL_ROOT}/scripts/confirm_assets.py     # 交互 y/N
-# 或：
+python {SKILL_ROOT}/scripts/confirm_assets.py            # 交互 y/N
 python {SKILL_ROOT}/scripts/confirm_assets.py --accept-all
 python {SKILL_ROOT}/scripts/confirm_assets.py --reject
 ```
-确认后再次运行 scan.py 即可。
 
 ### Phase 1 — 运行扫描脚本
 ```bash
@@ -114,9 +105,12 @@ python {SKILL_ROOT}/scripts/scan.py
 写到 `{SKILL_ROOT}/output/reports/YYYY-MM-DD_核心资产抄底.md`（如目录不存在需创建）。
 
 ### Phase 5 — 企微精简推送（仅触发时）
+
+推送开关由 `config.notification.wecom.enabled` 控制（默认 `true`）；webhook 在 `config/config.json` 中配置。
+
 1. 创建临时精简版 `PUSH_TMP.md`，格式：
    ```
-   【核心资产抄底信号】YYYY-MM-DD
+   **【核心资产抄底信号】YYYY-MM-DD**
    🔔 触发 N 只：
 
    **贵州茅台 (600519.SH)** 收盘 XXX
@@ -126,14 +120,13 @@ python {SKILL_ROOT}/scripts/scan.py
 
    ...
 
-   📄 完整报告：reports/核心资产抄底/YYYY-MM-DD_核心资产抄底.md
+   📄 完整报告：reports/YYYY-MM-DD_核心资产抄底.md
    ```
-2. 调用：
+2. 调用内置推送脚本（自动从 `config/config.json` 读 webhook）：
    ```bash
-   node {WECOM_ROOT}/scripts/push.js \
-     --type markdown --file PUSH_TMP.md --title "核心资产抄底信号"
+   python {SKILL_ROOT}/scripts/wecom_push.py --file PUSH_TMP.md
    ```
-3. 推送成功后删除 `PUSH_TMP.md`
+3. 推送成功（`errcode=0`）后删除 `PUSH_TMP.md`。若 `enabled=false`，跳过此阶段，仅保留本地报告。
 
 ### Phase 6 — 回复用户
 用一句话汇报结果：
@@ -159,12 +152,31 @@ python {SKILL_ROOT}/scripts/scan.py
 
 ---
 
+## 配置文件
+
+路径：`{SKILL_ROOT}/config/config.json`（已被本 skill 的 `.gitignore` 排除）。首次部署可参考 [config/config.example.json](config/config.example.json) 复制一份并填入实际 webhook。所有字段都是可选的，缺失时使用内置默认值。
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `asset_pool.excel_path` | `data/核心资产.xlsx` | 资产池 Excel 路径（相对 SKILL_ROOT 或绝对路径） |
+| `snapshot.auto_sync` | `true` | Excel 与 snapshot 有差异时是否自动同步快照（不阶断扫描） |
+| `snapshot.notify_on_pool_change` | `false` | 自动同步发生时是否额外推送变更摘要到企微 |
+| `notification.wecom.enabled` | `true` | 是否启用企微推送（关闭后仅生成本地报告） |
+| `notification.wecom.webhook` | `""` | 企微群机器人 webhook URL |
+| `notification.wecom.mentioned_list` | `[]` | @ 用户 ID 列表（可选） |
+| `notification.wecom.mentioned_mobile_list` | `[]` | @ 手机号列表（可选） |
+| `cooldown_days` | `7` | 冷静期天数 |
+
+CLI / 环境变量优先级：`--excel` > `CORE_ASSET_EXCEL` > `config.json` > 内置默认。
+
+---
+
 ## 关键约束
 
 - **仅触发时推企微**——避免每日空推噪音
 - **7 天冷静期**——同一只股票 7 天内只提醒 1 次（基于 triggered.json 的 `last_triggered` 日期）
 - **每次运行会更新 triggered.json**——本次新触发的股票 → 覆盖 `last_triggered` 为今日；冷静期内的保持不变
-- **Excel 可增删股票**——脚本每次重新读，但变更需经 confirm_assets.py 显式确认（保护机制）
+- **Excel 可增删股票**——默认 `auto_sync=true` 时变更会被自动同步；如需严格审核可关闭该选项后走 confirm_assets.py 交互流程
 - **快照（snapshot）是权威源**——扫描时实际使用 `data/assets_snapshot.json`，Excel 仅作为变更输入
 - **guanzhao 不识别的 ticker**（如 ASML.O）进入 `anomalies[]`，不影响其他股票的信号，在报告中单独列出提示用户
 
@@ -173,7 +185,6 @@ python {SKILL_ROOT}/scripts/scan.py
 ## 依赖 skill
 
 - **quant-buddy-skill**（核心层，必需）：价格数据源，通过 Step 0 动态挂载，`scan.py` 直接 import `QuantAPI` 调用
-- **wecom-push**：企微推送通道（必需）
 - **WebSearch**（built-in）：下跌原因调研
 
-所有依赖已在用户环境中配置。
+企微推送已内置为 [scripts/wecom_push.py](scripts/wecom_push.py)（stdlib `urllib`，无额外依赖），不再需要外部 wecom-push skill。

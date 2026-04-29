@@ -1,0 +1,21 @@
+{
+  "asset_pool": {
+    "excel_path": "data/核心资产.xlsx"
+  },
+  "snapshot": {
+    "auto_sync": true,
+    "notify_on_pool_change": false
+  },
+  "notification": {
+    "wecom": {
+      "enabled": true,
+      "webhook": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=YOUR_KEY_HERE",
+      "mentioned_list": [],
+      "mentioned_mobile_list": []
+    }
+  },
+  "scheduler": {
+    "enabled": true
+  },
+  "cooldown_days": 7
+}

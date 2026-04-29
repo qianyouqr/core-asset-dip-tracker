@@ -39,13 +39,14 @@ except Exception:
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_EXCEL = os.environ.get(
-    "CORE_ASSET_EXCEL",
-    os.path.join(SKILL_DIR, "data", "核心资产.xlsx"),
-)
 STATE_FILE = os.path.join(SKILL_DIR, "state", "triggered.json")
 SNAPSHOT_FILE = os.path.join(SKILL_DIR, "data", "assets_snapshot.json")
 PENDING_FILE = os.path.join(SKILL_DIR, "state", "pending_changes.json")
+
+# config_loader / wecom_push 在同目录
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from config_loader import load_config, resolve_excel_path, wecom_enabled  # noqa: E402
+from wecom_push import push_markdown  # noqa: E402
 
 
 def _find_core_root() -> str:
@@ -114,28 +115,34 @@ MAX_FORMULA_BATCH = 20
 # 资产池快照确认
 # ─────────────────────────────────────────
 
-def check_snapshot(excel_assets: list) -> tuple:
+def check_snapshot(excel_assets: list, auto_sync: bool = True) -> tuple:
     """对比 Excel 与快照。
 
     Returns
     -------
-    (status, payload)
-      ("first_run", excel_assets)   首次运行，已自动写入 snapshot
-      ("ok", snapshot_assets)        无差异，直接用快照
-      ("pending", diff_dict)         有差异，已写 pending_changes.json
+    (status, payload, diff_or_none)
+      ("first_run", excel_assets, None)
+      ("ok", snapshot_assets, None)
+      ("auto_synced", excel_assets, diff_dict)   auto_sync=True 且有差异
+      ("pending", diff_dict, diff_dict)          auto_sync=False 且有差异
     """
     snap = asset_pool.load_snapshot(SNAPSHOT_FILE)
     if snap is None:
         asset_pool.save_snapshot(SNAPSHOT_FILE, excel_assets)
-        return "first_run", excel_assets
+        return "first_run", excel_assets, None
 
     d = asset_pool.diff(snap, excel_assets)
     if asset_pool.is_empty_diff(d):
         asset_pool.clear_pending(PENDING_FILE)
-        return "ok", snap
+        return "ok", snap, None
+
+    if auto_sync:
+        asset_pool.save_snapshot(SNAPSHOT_FILE, excel_assets)
+        asset_pool.clear_pending(PENDING_FILE)
+        return "auto_synced", excel_assets, d
 
     asset_pool.save_pending(PENDING_FILE, d, excel_assets)
-    return "pending", d
+    return "pending", d, d
 
 
 def format_diff(d: dict) -> str:
@@ -393,30 +400,79 @@ def is_cooled_down(last_triggered_iso: str, today: date):
 # 主流程
 # ─────────────────────────────────────────
 
+def _diff_summary(d: dict) -> dict:
+    return {
+        "added_count": len(d.get("added") or []),
+        "removed_count": len(d.get("removed") or []),
+        "modified_count": len(d.get("modified") or []),
+        "added": d.get("added") or [],
+        "removed": d.get("removed") or [],
+        "modified": d.get("modified") or [],
+    }
+
+
+def _push_pool_change(cfg: dict, run_date: str, diff_dict: dict):
+    wecom = (cfg.get("notification") or {}).get("wecom") or {}
+    s = _diff_summary(diff_dict)
+    lines = [
+        f"**【核心资产池变更】{run_date}**",
+        f"➕ 新增 {s['added_count']} / ➖ 移除 {s['removed_count']} / ✏️ 改名 {s['modified_count']}",
+    ]
+    if s["added"]:
+        lines.append("新增：" + "、".join(f"{a['company']}({a['ticker']})" for a in s["added"][:10]))
+    if s["removed"]:
+        lines.append("移除：" + "、".join(f"{a['company']}({a['ticker']})" for a in s["removed"][:10]))
+    push_markdown(
+        wecom.get("webhook", ""),
+        "\n".join(lines),
+        mentioned_list=wecom.get("mentioned_list") or None,
+        mentioned_mobile_list=wecom.get("mentioned_mobile_list") or None,
+    )
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--excel", default=DEFAULT_EXCEL)
+    parser.add_argument("--excel", default=None,
+                        help="Excel 路径；不传则按 config / 环境变量 / 默认顺序")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+
+    cfg = load_config(SKILL_DIR)
+    excel_path = resolve_excel_path(cfg, SKILL_DIR, args.excel)
+    auto_sync = bool((cfg.get("snapshot") or {}).get("auto_sync", True))
+    notify_on_pool_change = bool((cfg.get("snapshot") or {}).get("notify_on_pool_change", False))
 
     today = date.today()
     run_date = today.strftime("%Y-%m-%d")
 
     # ── Phase 0.5：资产池快照一致性检查 ───────────────────────
-    excel_assets = asset_pool.load_excel(args.excel)
-    status, payload = check_snapshot(excel_assets)
+    excel_assets = asset_pool.load_excel(excel_path)
+    status, payload, diff_dict = check_snapshot(excel_assets, auto_sync=auto_sync)
+
     if status == "pending":
-        print("⚠️ 检测到资产池变更，扫描已中止。请确认以下变更后再运行：\n", flush=True)
-        print(format_diff(payload), flush=True)
+        print("⚠️ 检测到资产池变更（auto_sync=false），扫描已中止。\n", file=sys.stderr, flush=True)
+        print(format_diff(payload), file=sys.stderr, flush=True)
         confirm_path = os.path.join(os.path.dirname(__file__), 'confirm_assets.py')
-        print(f"\n👉 运行确认命令：python {confirm_path}", flush=True)
-        print(f"   pending 文件：{PENDING_FILE}", flush=True)
+        print(f"\n👉 运行确认命令：python {confirm_path}", file=sys.stderr, flush=True)
+        print(f"   pending 文件：{PENDING_FILE}", file=sys.stderr, flush=True)
         sys.exit(2)
 
     assets = payload
 
     if status == "first_run":
-        print(f"ℹ️ 首次运行：已生成资产快照 {SNAPSHOT_FILE}（{len(assets)} 个资产）", flush=True)
+        print(f"ℹ️ 首次运行：已生成资产快照 {SNAPSHOT_FILE}（{len(assets)} 个资产）",
+              file=sys.stderr, flush=True)
+    elif status == "auto_synced":
+        s = _diff_summary(diff_dict)
+        print(
+            f"ℹ️ 资产池已自动同步：新增 {s['added_count']} / 移除 {s['removed_count']} / 改名 {s['modified_count']}",
+            file=sys.stderr, flush=True,
+        )
+        if notify_on_pool_change and not args.dry_run and wecom_enabled(cfg):
+            try:
+                _push_pool_change(cfg, run_date, diff_dict)
+            except Exception as e:
+                print(f"⚠️ 资产池变更推送失败：{e}", file=sys.stderr, flush=True)
 
     # ── Phase 1：拉信号 ─────────────────────────────────────
     _api.new_session()
@@ -454,6 +510,7 @@ def main():
     out = {
         "run_date": run_date,
         "snapshot_status": status,
+        "asset_pool_change": _diff_summary(diff_dict) if diff_dict else None,
         "triggered": triggered,
         "cooled_down": cooled_down,
         "all_stocks": all_stocks,
